@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QuizPDF - Simulatore da PDF</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.min.js"></script>
+  <meta name="theme-color" content="#1e2937">
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .question-card { transition: all 0.3s; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+
+  <div class="max-w-xl mx-auto p-4">
+    <h1 class="text-3xl font-bold text-center py-6">📚 QuizPDF</h1>
+
+    <div id="home" class="space-y-6">
+      <div class="bg-slate-900 rounded-2xl p-8 text-center">
+        <p class="text-xl mb-6">Carica un PDF e trasforma il suo contenuto in un test</p>
+        <label id="uploadLabel" class="block border-2 border-dashed border-slate-400 hover:border-blue-500 rounded-2xl p-10 cursor-pointer transition">
+          <input type="file" id="pdfInput" accept="application/pdf" class="hidden">
+          <span class="text-4xl block mb-3">📄</span>
+          <span class="font-medium">Tocca per caricare il PDF</span>
+        </label>
+      </div>
+    </div>
+
+    <div id="preview" class="hidden bg-slate-900 rounded-2xl p-6 space-y-4">
+      <h2 id="pdfTitle" class="text-xl font-semibold"></h2>
+      <p id="pdfInfo" class="text-sm text-slate-400"></p>
+      <div class="flex gap-3">
+        <button onclick="generateQuiz()" class="flex-1 bg-blue-600 hover:bg-blue-700 py-4 rounded-xl font-medium text-lg">
+          🎯 Genera Test
+        </button>
+        <button onclick="resetApp()" class="flex-1 bg-slate-700 hover:bg-slate-600 py-4 rounded-xl font-medium">
+          Cambia PDF
+        </button>
+      </div>
+    </div>
+
+    <div id="settings" class="hidden bg-slate-900 rounded-2xl p-6 space-y-5">
+      <h3 class="text-lg font-medium">Impostazioni del Test</h3>
+      <div>
+        <label class="block text-sm mb-2">Numero di domande (5-20)</label>
+        <input type="range" id="numQuestions" min="5" max="20" value="10" class="w-full accent-blue-500">
+        <div class="text-center text-xl font-mono" id="numDisplay">10</div>
+      </div>
+      <button onclick="startGeneration()" class="w-full bg-emerald-600 hover:bg-emerald-700 py-4 rounded-xl font-medium text-lg">
+        Inizia Generazione con Gemini
+      </button>
+    </div>
+
+    <div id="loading" class="hidden text-center py-12">
+      <div class="animate-spin w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full mx-auto"></div>
+      <p class="mt-6 text-lg">Generazione in corso...</p>
+      <p id="status" class="text-slate-400 text-sm mt-2"></p>
+    </div>
+
+    <div id="quiz" class="hidden space-y-6">
+      <div class="flex justify-between items-center">
+        <div>Domanda <span id="currentQ" class="font-mono">1</span>/<span id="totalQ"></span></div>
+        <div id="scoreDisplay" class="font-medium"></div>
+      </div>
+      <div id="questionText" class="bg-slate-900 p-6 rounded-2xl text-lg leading-relaxed min-h-[140px]"></div>
+      <div id="options" class="space-y-3"></div>
+      <button onclick="nextQuestion()" id="nextBtn" class="hidden w-full py-4 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium">
+        Prossima domanda →
+      </button>
+    </div>
+
+    <div id="results" class="hidden bg-slate-900 rounded-2xl p-8 text-center space-y-6">
+      <h2 class="text-4xl font-bold" id="finalScore"></h2>
+      <p id="finalMessage" class="text-xl"></p>
+      <button onclick="restartQuiz()" class="w-full py-4 bg-blue-600 rounded-xl font-medium">Rifai il test</button>
+      <button onclick="resetApp()" class="w-full py-4 bg-slate-700 rounded-xl font-medium">Nuovo PDF</button>
+    </div>
+  </div>
+
+  <script>
+    let pdfText = "";
+    let questions = [];
+    let currentQuestion = 0;
+    let score = 0;
+
+    let GEMINI_API_KEY = localStorage.getItem('geminiKey');
+    if (!GEMINI_API_KEY) {
+      GEMINI_API_KEY = prompt("Inserisci la tua chiave Gemini API (gratuita da https://aistudio.google.com/app/apikey):");
+      if (GEMINI_API_KEY) localStorage.setItem('geminiKey', GEMINI_API_KEY);
+    }
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.7.76/pdf.worker.min.js';
+
+    document.getElementById('pdfInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      document.getElementById('home').classList.add('hidden');
+      document.getElementById('loading').classList.remove('hidden');
+      document.getElementById('status').textContent = "Leggo il PDF...";
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+        pdfText = "";
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          pdfText += textContent.items.map(item => item.str).join(" ") + "\n";
+        }
+
+        document.getElementById('pdfTitle').textContent = file.name;
+        document.getElementById('pdfInfo').textContent = `${pdf.numPages} pagine • ${Math.round(pdfText.length/1000)}k caratteri`;
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('preview').classList.remove('hidden');
+      } catch(err) {
+        alert("Errore nel leggere il PDF");
+        resetApp();
+      }
+    });
+
+    function generateQuiz() {
+      document.getElementById('preview').classList.add('hidden');
+      document.getElementById('settings').classList.remove('hidden');
+      document.getElementById('numQuestions').oninput = () => {
+        document.getElementById('numDisplay').textContent = document.getElementById('numQuestions').value;
+      };
+    }
+
+    async function startGeneration() {
+      const num = parseInt(document.getElementById('numQuestions').value);
+      document.getElementById('settings').classList.add('hidden');
+      document.getElementById('loading').classList.remove('hidden');
+      document.getElementById('status').textContent = "Gemini sta creando le domande...";
+
+      const prompt = `Crea esattamente ${num} domande a risposta multipla sul testo seguente. Ogni domanda ha 4 opzioni (A B C D) e una sola risposta corretta. Rispondi SOLO con JSON valido come questo esempio: [{"question":"Domanda?","A":"opzione1","B":"opzione2","C":"opzione3","D":"opzione4","correct":"B"}] 
+
+Testo: ${pdfText.substring(0, 28000)}`;
+
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+        const data = await res.json();
+        let raw = data.candidates[0].content.parts[0].text;
+        raw = raw.replace(/```json|```/g, '').trim();
+        questions = JSON.parse(raw);
+        if (!Array.isArray(questions)) questions = [questions];
+
+        document.getElementById('loading').classList.add('hidden');
+        startQuiz();
+      } catch (e) {
+        alert("Errore con Gemini. Controlla la chiave API o riprova più tardi.");
+        console.error(e);
+        resetApp();
+      }
+    }
+
+    function startQuiz() {
+      currentQuestion = 0;
+      score = 0;
+      document.getElementById('quiz').classList.remove('hidden');
+      showQuestion();
+    }
+
+    function showQuestion() {
+      const q = questions[currentQuestion];
+      document.getElementById('currentQ').textContent = currentQuestion + 1;
+      document.getElementById('totalQ').textContent = questions.length;
+      document.getElementById('questionText').textContent = q.question;
+
+      const optsDiv = document.getElementById('options');
+      optsDiv.innerHTML = "";
+      ['A','B','C','D'].forEach(letter => {
+        const btn = document.createElement('button');
+        btn.className = "w-full text-left p-5 bg-slate-800 hover:bg-slate-700 rounded-2xl text-lg transition";
+        btn.textContent = `${letter}. ${q[letter]}`;
+        btn.onclick = () => selectAnswer(letter, q.correct || q.risposta_corretta);
+        optsDiv.appendChild(btn);
+      });
+      document.getElementById('nextBtn').classList.add('hidden');
+    }
+
+    function selectAnswer(chosen, correct) {
+      if (chosen === correct) score++;
+      const buttons = document.querySelectorAll('#options button');
+      buttons.forEach(b => {
+        const letter = b.textContent[0];
+        if (letter === correct) b.classList.add('bg-emerald-600');
+        if (letter === chosen && letter !== correct) b.classList.add('bg-red-600');
+        b.disabled = true;
+      });
+      document.getElementById('nextBtn').classList.remove('hidden');
+    }
+
+    function nextQuestion() {
+      currentQuestion++;
+      if (currentQuestion < questions.length) {
+        showQuestion();
+      } else {
+        showResults();
+      }
+    }
+
+    function showResults() {
+      document.getElementById('quiz').classList.add('hidden');
+      const perc = Math.round((score / questions.length) * 100);
+      document.getElementById('finalScore').textContent = perc + "%";
+      document.getElementById('finalMessage').textContent = perc >= 70 ? "Ottimo! 🎉" : "Puoi migliorare, continua! 💪";
+      document.getElementById('results').classList.remove('hidden');
+    }
+
+    function restartQuiz() { document.getElementById('results').classList.add('hidden'); startQuiz(); }
+    function resetApp() { location.reload(); }
+  </script>
+</body>
+</html>
